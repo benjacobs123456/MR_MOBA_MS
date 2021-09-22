@@ -232,7 +232,7 @@ mr_leaveoneout(combo_cbmi_7y_8y) )
 
 write_csv(loo_snps,"loo.csv")
 ````
-Multivariable MR
+Remove adult BMI SNPs
 ````R
 # read in Yengo et al GWAS
 adult_bmi = read_tsv("Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.txt")
@@ -247,29 +247,6 @@ rename("effect_allele"=Tested_Allele,
 
 adult_bmi_dat = format_data(adult_bmi_dat,type="exposure")
 
-
-
-do_mv_mr = function(x_dat){
-x_dat = x_dat %>% filter(SNP %in% adult_bmi_dat$SNP)
-x_dat = clump_data(x_dat)
-timepoint_adult_bmi_dat = adult_bmi_dat %>% filter(SNP %in% x_dat$SNP)
-x_dat$exposure.id = "cBMI"
-timepoint_adult_bmi_dat$exposure.id="aBMI"
-exp_dat = bind_rows(timepoint_adult_bmi_dat,x_dat)
-mv_dat = mv_harmonise_data(exp_dat,ms_dat)
-mv_multiple(mv_dat)$result
-}
-
-
-do_mv_mr(cbmi_birth_6w)
-do_mv_mr(cbmi_3mo_1.5y)
-do_mv_mr(cbmi_2y_5y)
-do_mv_mr(cbmi_7y_8y)
-
-````
-
-Repeat after removing adult BMI SNPs  
-````R
 adult_bmi_sigsnps = adult_bmi %>%  filter(P<1e-5)
 
 # remove Yengo SNPs associated with adult BMI at p<1e-5

@@ -8,11 +8,11 @@
 - TwoSampleMR
 
 ## Parts
-[] MR of childhood BMI per epoch --> MS risk
-[] Checking pleiotropy, heterogeneity, and MR-PRESSO
-[] MR of childhood BMI at each time point --> MS risk
-[] Sensitivity analysis without SNPs influencing adult BMI
-[] MR of birthweight --> MS (from larger GWAS)
+- MR of childhood BMI per epoch --> MS risk
+- Checking pleiotropy, heterogeneity, and MR-PRESSO
+- MR of childhood BMI at each time point --> MS risk
+- Sensitivity analysis without SNPs influencing adult BMI
+- MR of birthweight --> MS (from larger GWAS)
 
 
 Load the packages we'll need
@@ -427,6 +427,8 @@ write_csv(individual_time_points,"individual_time_points.csv")
 
 betas = individual_time_points %>% filter(method=="Inverse variance weighted" | method == "Wald ratio")
 betas = betas$b
+MannKendall(betas)
+
 
 # pleiotropy
 pleio_cbmi_birth = mr_pleiotropy_test(cbmi_birth )

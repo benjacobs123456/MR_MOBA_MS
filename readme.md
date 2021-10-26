@@ -11,6 +11,7 @@
 - MR of childhood BMI per epoch --> MS risk
 - Checking pleiotropy, heterogeneity, and MR-PRESSO
 - MR of childhood BMI at each time point --> MS risk
+- Multivariable MR
 - Sensitivity analysis without SNPs influencing adult BMI
 - MR of birthweight --> MS (from larger GWAS)
 

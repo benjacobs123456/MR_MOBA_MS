@@ -25,6 +25,7 @@ library(readr)
 library(gridExtra)
 library(Kendall)
 library(ggstance)
+library(stringr)
 ````
 
 Load the childhood BMI GWAS and format
@@ -84,6 +85,15 @@ cbmi_3mo_1.5y,
 cbmi_2y_5y,
 cbmi_7y_8y)
 
+get_f_stat = function(x){
+# steiger and moe
+mean_f2 = mean(x$beta.exposure^2/x$se.exposure^2)
+return(mean_f2)
+}
+exposure_datasets = list(cbmi_birth_6w,cbmi_3mo_1.5y,cbmi_2y_5y,cbmi_7y_8y)
+f2 = lapply(exposure_datasets,get_f_stat)
+
+
 # harmonise
 combo_cbmi_birth_6w = harmonise_data(cbmi_birth_6w,ms_dat)
 combo_cbmi_3mo_1.5y = harmonise_data(cbmi_3mo_1.5y,ms_dat)
@@ -130,18 +140,6 @@ p
 dev.off()
 
 mr_results %>% filter(method=="Inverse variance weighted") %>% mutate(or = exp(b),lowerci = exp(b-1.96*se),upperci=exp(b+1.96*se))
-````
-
-Here are the results of the main IVW analysis:
-
-Epoch   |   Beta    | SE    | P       | N SNPs
-------- | -------   | ----- | ------- | --------
-Birth to 6 weeks | -0.2089121 | 0.24341350 | 0.390748941 | 7
-3 months to 1.5 years | 0.1766631 | 0.05558243 | 0.001480913 | 23
-2 years to 5 years | 0.2670678 | 0.12266639 | 0.029466543 | 4
-7 years to 8 years | 0.2890067 | 0.10974622 | 0.008453254 | 4
-
-````R
 
 p1=mr_scatter_plot(res_epoch1[3,],dat=combo_cbmi_birth_6w)$v8JIZj.ndQjSx + theme_bw() + labs(x="SNP effect on standardised BMI",y="SNP effect on MS (log OR)")+annotate("label",label="Birth - 6 weeks",x = -Inf, y = Inf, hjust = 0, vjust = 1)+theme(legend.position="none")
 
@@ -208,9 +206,7 @@ write_csv(heterogeneity,"heterogeneity.csv")
 ````
 Run MR-PRESSO:
 ````R
-
 # mr presso
-
 presso_fx = function(x_dat){
 set.seed(1)
 presso_res = run_mr_presso(x_dat,NbDistribution=1000)
@@ -222,9 +218,9 @@ presso_fx(combo_cbmi_3mo_1.5y)
 presso_fx(combo_cbmi_2y_5y)
 presso_fx(combo_cbmi_7y_8y)
 ````
+
 Leave-one-out
 ````R
-
 loo_snps = bind_rows(mr_leaveoneout(combo_cbmi_birth_6w),
 mr_leaveoneout(combo_cbmi_3mo_1.5y) ,
 mr_leaveoneout(combo_cbmi_2y_5y) ,
@@ -232,7 +228,116 @@ mr_leaveoneout(combo_cbmi_7y_8y) )
 
 write_csv(loo_snps,"loo.csv")
 ````
-Remove adult BMI SNPs
+
+Multivariable MR
+````R
+# read in Yengo et al GWAS
+adult_bmi = read_tsv("Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.txt")
+
+adult_bmi_dat = adult_bmi %>%
+rename("effect_allele"=Tested_Allele,
+"other_allele"=Other_Allele,
+"eaf"=Freq_Tested_Allele_in_HRS,
+"beta"=BETA,
+"se"=SE,
+"pval"=P)
+
+adult_bmi_dat$Phenotype = "a_bmi"
+adult_bmi_dat = adult_bmi_dat %>% filter(SNP %in% exposures$SNP)
+
+adult_bmi_dat = format_data(adult_bmi_dat,type="outcome")
+
+# function to do MV MR
+epochs = list(cbmi_birth_6w,cbmi_3mo_1.5y,cbmi_2y_5y,cbmi_7y_8y)
+
+mv_mr_results = lapply(epochs,function(x){
+message("Filtering ",x$exposure[1])
+
+# combine cbmi and abmi, and harmonise
+combo = harmonise_data(x,adult_bmi_dat)
+
+# split harmonised data
+abmi =  combo %>% filter(mr_keep==TRUE) %>% select(SNP,contains("outcome"),-samplesize.outcome)
+cbmi =  combo %>% filter(mr_keep==TRUE) %>% select(SNP,contains("exposure"))
+
+# change cols
+colnames(abmi) = str_replace(colnames(abmi),"outcome","exposure")
+abmi$id.exposure = "abmi"
+cbmi$id.exposure = "cbmi"
+
+combined_exposure = rbind(cbmi,abmi)
+combined_exposure = clump_data(combined_exposure)
+
+if(nrow(combined_exposure)>2){
+  # harmonise
+  harmonised_combined_exposure = mv_harmonise_data(combined_exposure,ms_dat)
+
+  f_stat_cbmi = mean(harmonised_combined_exposure$exposure_beta[,2]^2/harmonised_combined_exposure$exposure_se[,2]^2)
+  f_stat_abmi = mean(harmonised_combined_exposure$exposure_beta[,1]^2/harmonised_combined_exposure$exposure_se[,1]^2)
+
+  message("Mean cbmi F stat for ",x$exposure[1]," is ",f_stat_cbmi)
+  message("Mean abmi F stat for ",x$exposure[1]," is ",f_stat_abmi)
+
+  # do MV MR
+  mv_res1 = mv_multiple(harmonised_combined_exposure)
+  mv_res2 = mv_residual(harmonised_combined_exposure)
+
+  df = data.frame(cbind(harmonised_combined_exposure$exposure_beta,harmonised_combined_exposure$exposure_pval,harmonised_combined_exposure$outcome_beta,harmonised_combined_exposure$outcome_pval))
+  df$SNP = rownames(df)
+  colnames(df) = c("Beta_adult_bmi","Beta_childhood_bmi","Pval_adult_bmi","Pval_childhood_bmi","Beta_MS","Pval_MS","SNP")
+  rownames(df)=NULL
+  df = df %>% select(7,1,2,5,3,4,6) %>% mutate(concordant = ifelse((Beta_adult_bmi <0 & Beta_childhood_bmi<0 )|(Beta_adult_bmi>0 & Beta_childhood_bmi>0),"Yes","No")) %>% mutate(GWAS_sig_cbmi = ifelse(Pval_childhood_bmi<5e-8,"Yes","No")) %>% mutate(GWAS_sig_abmi = ifelse(Pval_adult_bmi<5e-8,"Yes","No")) %>% mutate(GWAS_suggestive_abmi = ifelse(Pval_adult_bmi<1e-5,"Yes","No"))
+
+  df$exposure_epoch = as.character(x$exposure[1])
+  # combine results
+  mv_res1$result$method = "Multiple"
+  mv_res2$result$method = "Residual"
+  result_df = bind_rows(mv_res1$result,mv_res2$result)
+  return(list(df,result_df))
+} else {
+  message("Insufficient numbers of SNPs. Skipping.")
+}
+})
+
+
+overall_res_df = bind_rows(mv_mr_results[[1]][[2]],mv_mr_results[[2]][[2]],mv_mr_results[[4]][[2]]) %>% filter(exposure!="a_bmi") %>% mutate(OR = exp(b)) %>% mutate(lower_ci = exp(b-1.96*se)) %>% mutate(upper_ci = exp(b + 1.96*se))
+
+overall_res_df = overall_res_df %>% select(-id.exposure,-id.outcome,-outcome)
+
+univariable_ivw_results = mr_results %>% filter(method=="Inverse variance weighted") %>% mutate(OR = exp(b),lower_ci = exp(b-1.96*se),upper_ci=exp(b+1.96*se))
+univariable_ivw_results$exposure = c("cbmi_birth_6w","cbmi_3mo_1.5y","cbmi_2y_5y","cbmi_7y_8y")
+univariable_ivw_results = univariable_ivw_results %>% select(-id.exposure,-id.outcome,-outcome,-epoch)
+
+overall_res_df = overall_res_df %>% bind_rows(univariable_ivw_results)
+
+overall_res_df$epoch = factor(overall_res_df$exposure)
+overall_res_df$epoch = recode(overall_res_df$exposure,
+  "cbmi_birth_6w"="Birth to 6 weeks",
+  "cbmi_3mo_1.5y"="3 months to 1.5 years",
+  "cbmi_2y_5y"="2 years to 5 years",
+  "cbmi_7y_8y"="7 years to 8 years")
+
+overall_res_df$epoch = factor(overall_res_df$epoch,levels=c("Birth to 6 weeks","3 months to 1.5 years","2 years to 5 years","7 years to 8 years"))
+
+p=ggplot(overall_res_df %>% filter(method %in% c("Inverse variance weighted","Residual")),aes(b,epoch,col=method))+
+geom_point(position=position_dodgev(height=0.2))+
+ggplot2::geom_errorbarh(mapping=aes(xmin=b-1.96*se,xmax=b+1.96*se,height=0.1),position=position_dodgev(height=0.2))+
+geom_vline(xintercept=0,alpha=0.1)+
+theme_bw()+
+labs(x="Beta (MR causal estimate)",y="Childhood BMI epoch",col="MR method")
+
+png("multivariable_mr.png",res=300,units="in",height=8,width=8)
+p
+dev.off()
+
+mv_snp_df = bind_rows(mv_mr_results[[1]][[1]],mv_mr_results[[2]][[1]],mv_mr_results[[4]][[1]])
+write_csv(mv_snp_df,"mv_snps.csv")
+
+write_csv(overall_res_df,"mv_res_df.csv")
+
+````
+
+Restrict to SNPs not associated with adult BMI
 ````R
 # read in Yengo et al GWAS
 adult_bmi = read_tsv("Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.txt")
@@ -247,61 +352,29 @@ rename("effect_allele"=Tested_Allele,
 
 adult_bmi_dat = format_data(adult_bmi_dat,type="exposure")
 
-adult_bmi_sigsnps = adult_bmi %>%  filter(P<1e-5)
+adult_bmi_sigsnps = adult_bmi %>%  filter(P<0.05)
 
-# remove Yengo SNPs associated with adult BMI at p<1e-5
+# remove Yengo SNPs associated with adult BMI at p<0.05
 
-# show excluded snps
-cbmi_birth_6w %>% filter((SNP %in% adult_bmi_sigsnps$SNP))
-cbmi_3mo_1.5y %>% filter((SNP %in% adult_bmi_sigsnps$SNP))
-cbmi_2y_5y %>% filter((SNP %in% adult_bmi_sigsnps$SNP))
-cbmi_7y_8y %>% filter((SNP %in% adult_bmi_sigsnps$SNP))
+abmi_removed_mr_res = lapply(epochs,function(x){
+x = x %>% filter(SNP %in% adult_bmi_dat$SNP) %>% filter(!(SNP %in% adult_bmi_sigsnps$SNP))
+if(nrow(x)>1){
+  combo_x = harmonise_data(x,ms_dat)
+  write_csv(path=paste0("abmi_removed_combo_",as.character(x$exposure[1]),".csv"),combo_x)
+  res = mr(combo_x)
+  print(mr_pleiotropy_test(combo_x))
+  res$epoch = as.character(x$exposure[1])
+  return(res)
+}
+})
 
-# exclude snps
-cbmi_birth_6w = cbmi_birth_6w %>% filter(!(SNP %in% adult_bmi_sigsnps$SNP))
-cbmi_3mo_1.5y = cbmi_3mo_1.5y %>% filter(!(SNP %in% adult_bmi_sigsnps$SNP))
-cbmi_2y_5y = cbmi_2y_5y %>% filter(!(SNP %in% adult_bmi_sigsnps$SNP))
-cbmi_7y_8y = cbmi_7y_8y %>% filter(!(SNP %in% adult_bmi_sigsnps$SNP))
-
-# format
-combo_cbmi_birth_6w = harmonise_data(cbmi_birth_6w,ms_dat)
-combo_cbmi_3mo_1.5y = harmonise_data(cbmi_3mo_1.5y,ms_dat)
-combo_cbmi_2y_5y = harmonise_data(cbmi_2y_5y,ms_dat)
-combo_cbmi_7y_8y = harmonise_data(cbmi_7y_8y,ms_dat)
-
-write_csv(combo_cbmi_birth_6w,"abmi_removed_combo_cbmi_birth_6w.csv")
-write_csv(combo_cbmi_3mo_1.5y,"abmi_removed_combo_cbmi_3mo_1.5y.csv")
-write_csv(combo_cbmi_2y_5y,"abmi_removed_combo_cbmi_2y_5y.csv")
-write_csv(combo_cbmi_7y_8y,"abmi_removed_combo_cbmi_7y_8y.csv")
-
-# do basic MR
-res_epoch1 = mr(combo_cbmi_birth_6w)
-res_epoch2 = mr(combo_cbmi_3mo_1.5y)
-res_epoch3 = mr(combo_cbmi_2y_5y)
-res_epoch4 = mr(combo_cbmi_7y_8y)
-
-# plot results
-res_epoch1$epoch = "Birth to 6 weeks"
-res_epoch2$epoch = "3 months to 1.5 years"
-res_epoch3$epoch = "2 years to 5 years"
-res_epoch4$epoch = "7 years to 8 years"
-
-mr_results = bind_rows(res_epoch1,res_epoch2,res_epoch3,res_epoch4)
+mr_results = do.call("rbind",abmi_removed_mr_res)
+mr_results = mr_results %>% mutate(OR = exp(b)) %>% mutate(lower_ci = exp(b-1.96*se)) %>% mutate(upper_ci = exp(b + 1.96*se))
 
 # write results
 write_csv(mr_results,"mr_results_abmi_removed.csv")
 
-# make nice plots
-mr_results$epoch = factor(mr_results$epoch,levels=c("Birth to 6 weeks","3 months to 1.5 years","2 years to 5 years","7 years to 8 years"))
-
-p=ggplot(mr_results,aes(b,epoch,col=method))+geom_point()+ggplot2::geom_errorbarh(mapping=aes(xmin=b-1.96*se,xmax=b+1.96*se,height=0.1))+geom_vline(xintercept=0,alpha=0.1)+theme_bw()+facet_wrap(~method,ncol=1)+
-labs(x="Beta (MR causal estimate)",y="Childhood BMI epoch",col="MR method")
-
-png("cbmi_mr_abmi_removed.png",res=300,units="in",height=8,width=8)
-p
-dev.off()
 ````
-
 
 Repeat at individual time points
 ````R
